@@ -1,0 +1,11 @@
+# 聊天文件引用点击选择：右侧栏 / IDEA 打开
+# 行为：点击聊天里的 dsh-resource://file/ 链接弹出选择框；
+#       「右侧栏打开」走 DSH 自带预览（带行号），「IDEA 打开」调 idea64.exe --line。
+# 配置：ideaPath 留空则自动探测 JetBrains 安装目录；workspaceRoot 留空则
+#       依次尝试 DSH 工作区服务、进程 cwd，找不到文件时按文件名有界搜索。
+- insert:
+    - id: '@local/chat-idea-jump'
+      name: '@local/chat-idea-jump'
+      config:
+        ideaPath: ''
+        workspaceRoot: ''

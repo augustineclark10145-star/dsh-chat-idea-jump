@@ -1,0 +1,32 @@
+{
+  "name": "@local/chat-idea-jump",
+  "version": "0.6.2",
+  "private": true,
+  "type": "module",
+  "description": "聊天里的文件引用点击弹出选择：右侧栏打开（定位行号）或 IDEA 打开（idea64.exe --line）",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-context-menu",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
