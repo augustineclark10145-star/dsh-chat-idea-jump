@@ -121,8 +121,8 @@ window.__ModuleLoader__.load({
 					body: JSON.stringify(payload),
 				});
 				const data = await res.json().catch(() => ({}));
-				if (data.ok) toast(`已在 IDEA 打开 ${data.file}${data.line ? `:${data.line}` : ''}`);
-				else toast(`IDEA 打开失败：${data.error || res.status}`, true);
+				if (data.ok) toast(`已在 ${data.editor || '编辑器'} 打开 ${data.file}${data.line ? `:${data.line}` : ''}`);
+				else toast(`打开失败：${data.error || res.status}`, true);
 			} catch (error) {
 				toast(`请求失败：${String(error?.message ?? error)}`, true);
 			}
@@ -169,6 +169,14 @@ window.__ModuleLoader__.load({
 				let menu = null;
 				let cleanups = [];
 				let lastMouse = { x: 200, y: 200 };
+				let editorList = [{ id: 'idea', label: 'IDEA', kind: 'idea' }];
+				let configState = { ideaPath: '', workspaceRoot: '', searchRoots: [], editors: [] };
+
+				// 菜单里的编辑器列表来自 host 自动探测 + 设置页额外配置；失败就保留 IDEA 兜底。
+				void fetch('/api/chat-idea-jump/state').then((res) => res.json()).then((data) => {
+					if (Array.isArray(data?.editors) && data.editors.length) editorList = data.editors;
+					if (data?.config && typeof data.config === 'object') configState = data.config;
+				}).catch(() => { /* 保留默认 IDEA */ });
 
 				document.addEventListener('mousemove', (e) => { lastMouse = { x: e.clientX, y: e.clientY }; }, { passive: true });
 
@@ -201,6 +209,21 @@ window.__ModuleLoader__.load({
 						() => document.removeEventListener('keydown', onKey, true),
 						() => window.removeEventListener('scroll', onScroll, true),
 					];
+				}
+
+				/** 每个已探测/配置的编辑器一条菜单项；没有就退回 IDEA。 */
+				function editorActions(info) {
+					const target = String(info?.path || info?.address || '');
+					const isMarkdown = /\.md(?:$|[?#:])/i.test(target);
+					const list = (editorList.length ? editorList : [{ id: 'idea', label: 'IDEA', kind: 'idea' }])
+						.filter((editor) => !editor.markdownOnly || isMarkdown)
+						.sort((a, b) => (b.markdownOnly ? 1 : 0) - (a.markdownOnly ? 1 : 0));
+					return list.map((editor) => [
+						`${editor.label} 打开`,
+						info.line ? `第 ${info.line} 行` : '',
+						() => { void ideaOpen({ ...info, editor: editor.id }); },
+						editor.kind === 'idea',
+					]);
 				}
 
 				/** 右侧栏打开：优先用锚点原地址；只有纯文本/绝对路径才回 host 解析后拼地址。 */
@@ -263,9 +286,7 @@ window.__ModuleLoader__.load({
 					e.stopPropagation();
 					const title = `${info.path}${info.line ? `:${info.line}${info.lineEnd ? `-${info.lineEnd}` : ''}` : ''}`;
 					showChooser(e.clientX, e.clientY, title, [
-						['IDEA 打开', info.line ? `--line ${info.line}` : '', () => {
-							void ideaOpen({ path: info.path, line: info.line, lineEnd: info.lineEnd, sessionId: currentSessionIdOf(ctx) });
-						}, true],
+						...editorActions({ path: info.path, line: info.line, lineEnd: info.lineEnd, sessionId: currentSessionIdOf(ctx) }),
 						['右侧栏打开', info.line ? `定位 ${info.line} 行` : '', () => { void openRight({ path: info.path, line: info.line }); }],
 					]);
 					return true;
@@ -287,11 +308,9 @@ window.__ModuleLoader__.load({
 					const label = info.path ? basenameOf('dsh-resource://file/' + info.path.replace(/\\/g, '/')) : basenameOf(info.address);
 					showChooser(e.clientX, e.clientY, `${label}${info.line ? `:${info.line}` : ''}`, [
 						['右侧栏打开', info.line ? `定位 ${info.line} 行` : '', () => { void openRight(info); }, true],
-						['IDEA 打开', info.line ? `--line ${info.line}` : '', () => {
-							void ideaOpen(info.address
-								? { address: info.address, line: info.line, lineEnd: info.lineEnd }
-								: { path: info.path, line: info.line, lineEnd: info.lineEnd, sessionId: currentSessionIdOf(ctx) });
-						}],
+						...editorActions(info.address
+							? { address: info.address, line: info.line, lineEnd: info.lineEnd }
+							: { path: info.path, line: info.line, lineEnd: info.lineEnd, sessionId: currentSessionIdOf(ctx) }),
 					]);
 					return true;
 				}
@@ -316,7 +335,7 @@ window.__ModuleLoader__.load({
 							const line = options?.params?.line;
 							showChooser(lastMouse.x, lastMouse.y, `${basenameOf(url)}${line ? `:${line}` : ''}`, [
 								['右侧栏打开', line ? `定位 ${line} 行` : '', () => { try { orig(url, options); } catch (error) { toast(`打开失败：${String(error?.message ?? error)}`, true); } }, true],
-								['IDEA 打开', line ? `--line ${line}` : '', () => { void ideaOpen({ address: url, line: Number.isFinite(line) ? line : null }); }],
+								...editorActions({ address: url, line: Number.isFinite(line) ? line : null }),
 							]);
 							return Promise.resolve();
 						}
@@ -338,7 +357,7 @@ window.__ModuleLoader__.load({
 					ctx.effect?.(() => () => clearInterval(timer));
 				}
 
-				/** 官方右键菜单贡献：文件芯片右键 →「在 IDEA 中打开」 */
+				/** 官方右键菜单贡献：文件芯片右键 →「在默认编辑器中打开」 */
 				try {
 					if (ctx.contextMenus && typeof ctx.contextMenus.register === 'function') {
 						ctx.effect(() => ctx.contextMenus.register({
@@ -348,10 +367,11 @@ window.__ModuleLoader__.load({
 							resolve(target) {
 								const value = target?.value ?? {};
 								const line = Number.isFinite(value.line) ? value.line : null;
+								const editor = editorList.find((item) => item.id === 'idea') || editorList[0] || { id: 'idea', label: 'IDEA' };
 								return {
-									id: 'cij-open-in-idea',
-									label: line ? `在 IDEA 中打开（${line} 行）` : '在 IDEA 中打开',
-									run: () => { void ideaOpen(value.address ?? null, line, null, value.path); },
+									id: 'cij-open-in-editor',
+									label: line ? `在 ${editor.label} 中打开（${line} 行）` : `在 ${editor.label} 中打开`,
+									run: () => { void ideaOpen({ address: value.address, path: value.path, line, editor: editor.id }); },
 								};
 							},
 						}));
@@ -383,13 +403,14 @@ window.__ModuleLoader__.load({
 							const ideaDraft = value('ideaPath', cfg.ideaPath ?? '');
 							const rootDraft = value('workspaceRoot', cfg.workspaceRoot ?? '');
 							const rootsDraft = value('searchRootsText', snapRoots.join('\n'));
+							const editorsDraft = value('editorsText', (Array.isArray(cfg.editors) ? cfg.editors : []).join('\n'));
 							const edit = (key, v) => setDraft({
-								ideaPath: ideaDraft, workspaceRoot: rootDraft, searchRootsText: rootsDraft, [key]: v,
+								ideaPath: ideaDraft, workspaceRoot: rootDraft, searchRootsText: rootsDraft, editorsText: editorsDraft, [key]: v,
 							});
 							const save = async () => {
 								if (!scope || typeof scope.set !== 'function') { setStatus('保存不可用：scope 缺失'); return; }
 								const searchRoots = String(rootsDraft).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-								const entries = [['ideaPath', String(ideaDraft).trim()], ['workspaceRoot', String(rootDraft).trim()], ['searchRoots', searchRoots]];
+								const entries = [['ideaPath', String(ideaDraft).trim()], ['workspaceRoot', String(rootDraft).trim()], ['searchRoots', searchRoots], ['editors', String(editorsDraft).split(/\r?\n/).map((s) => s.trim()).filter(Boolean)]];
 								try {
 									for (const [key, v] of entries) {
 										const accepted = await Promise.resolve(scope.set(key, v));
@@ -402,7 +423,7 @@ window.__ModuleLoader__.load({
 									setStatus(`保存失败：${String(error?.message ?? error)}`);
 								}
 							};
-							const inputStyle = 'width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3));border-radius:6px;font-size:12.5px;font-family:inherit;background:var(--dsw-alias-bg-layer-1, #fff);color:var(--dsw-alias-label-primary, #222)';
+							const inputStyle = { width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))', borderRadius: 6, fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, #222)' };
 							return E('div', { style: { display: 'grid', gap: '10px', padding: '4px 2px', fontSize: '12.5px', fontFamily: 'inherit' } },
 								E('div', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, 'idea64.exe 路径（留空自动探测）'),
@@ -413,9 +434,12 @@ window.__ModuleLoader__.load({
 								E('div', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, '文件名搜索的附加项目根（每行一个）'),
 									E('textarea', { style: { ...{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))', borderRadius: 6, fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, #222)' }, minHeight: 64 }, value: rootsDraft, onChange: (ev) => edit('searchRootsText', ev.target.value) })),
+								E('div', null,
+									E('div', { style: { marginBottom: 4, opacity: .75 } }, '其他编辑器（每行：名称=exe路径）'),
+									E('textarea', { style: { ...{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))', borderRadius: 6, fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, #222)' }, minHeight: 64 }, value: editorsDraft, placeholder: '例如 VS Code=C:/Tools/Code.exe', onChange: (ev) => edit('editorsText', ev.target.value) })),
 								E('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
 									E('button', {
-										style: 'padding:6px 16px;border:none;border-radius:7px;cursor:pointer;font-size:12.5px;font-family:inherit;background:var(--dsw-alias-button-primary-fill, #0f1115);color:var(--dsw-alias-label-primary-foreground, #fff)',
+										style: { padding: '6px 16px', border: 'none', borderRadius: 7, cursor: 'pointer', fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-button-primary-fill, #0f1115)', color: 'var(--dsw-alias-label-primary-foreground, #fff)' },
 										onClick: save,
 									}, '保存'),
 									status ? E('span', { style: { opacity: .75 } }, status) : null),
@@ -428,66 +452,42 @@ window.__ModuleLoader__.load({
 				try {
 					if (ctx.slots && typeof ctx.slots.inject === 'function') {
 						function ConfigSection() {
-							const [form, setForm] = React.useState(null);
-							const [snap, setSnap] = React.useState({});
-							const [draft, setDraft] = React.useState(null);
-							const [status, setStatus] = React.useState('');
-							React.useEffect(() => {
-								let un;
-								try {
-									const forms = ctx.get?.('configForms');
-									const f = typeof forms?.get === 'function' ? forms.get('@local/chat-idea-jump') : null;
-									if (f && typeof f.getSnapshot === 'function') {
-										setForm(f);
-										setSnap(f.getSnapshot() ?? {});
-										if (typeof f.subscribe === 'function') un = f.subscribe(() => { try { setSnap(f.getSnapshot() ?? {}); } catch { /* 忽略 */ } });
-									} else {
-										setStatus('设置域不可用：configForms 缺失或找不到本插件的表单');
-									}
-								} catch (error) { setStatus(String(error?.message ?? error)); }
-								return typeof un === 'function' ? un : undefined;
-							}, []);
-							const cfg = snap.value && typeof snap.value === 'object' ? snap.value : {};
-							const snapRoots = Array.isArray(cfg.searchRoots) ? cfg.searchRoots : [];
-							const value = (key, fallback) => draft && key in draft ? draft[key] : fallback;
-							const ideaDraft = value('ideaPath', cfg.ideaPath ?? '');
-							const rootDraft = value('workspaceRoot', cfg.workspaceRoot ?? '');
-							const rootsDraft = value('searchRootsText', snapRoots.join('\n'));
-							const edit = (key, v) => setDraft({
-								ideaPath: ideaDraft, workspaceRoot: rootDraft, searchRootsText: rootsDraft, [key]: v,
-							});
-							const save = async () => {
-								if (!form || typeof form.set !== 'function') { setStatus('保存不可用：表单缺失'); return; }
-								const searchRoots = String(rootsDraft).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-								const entries = [['ideaPath', String(ideaDraft).trim()], ['workspaceRoot', String(rootDraft).trim()], ['searchRoots', searchRoots]];
-								try {
-									for (const [key, v] of entries) {
-										const accepted = await Promise.resolve(form.set(key, v));
-										if (accepted !== true) { setStatus(`保存被拒绝：${key}`); return; }
-									}
-									setStatus('已保存，插件正在重启生效…');
-									setDraft(null);
-									setTimeout(() => setStatus(''), 4000);
-								} catch (error) {
-									setStatus(`保存失败：${String(error?.message ?? error)}`);
-								}
-							};
+							const cfg = configState;
+							const textOf = (key) => String(cfg[key] ?? '');
+							const linesOf = (key) => Array.isArray(cfg[key]) ? cfg[key].join('\n') : '';
 							const box = { width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))', borderRadius: 6, fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, #222)' };
-							return E('div', { style: { display: 'grid', gap: '12px', maxWidth: 560, fontSize: '12.5px', fontFamily: 'inherit' } },
-								status ? E('div', { style: { opacity: .8, color: status.startsWith('已保存') ? 'inherit' : 'var(--dsw-alias-state-error-primary, #b3261e)' } }, status) : null,
-								E('div', null,
+							const save = async (event) => {
+								event.preventDefault();
+								const read = (name) => event.currentTarget.elements?.[name]?.value ?? '';
+								const values = {
+									ideaPath: read('ideaPath').trim(),
+									workspaceRoot: read('workspaceRoot').trim(),
+									searchRoots: read('searchRoots').split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+									editors: read('editors').split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+								};
+								try {
+									const res = await fetch('/api/chat-idea-jump/config', {
+										method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
+									});
+									const data = await res.json().catch(() => ({}));
+									if (!data.ok) { toast(`保存失败：${data.error || res.status}`, true); return; }
+									toast('已保存，插件正在重启生效…');
+								} catch (error) { toast(`保存失败：${String(error?.message ?? error)}`, true); }
+							};
+							return E('form', { onSubmit: save, style: { display: 'grid', gap: '12px', maxWidth: 560, fontSize: '12.5px', fontFamily: 'inherit' } },
+								E('label', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, 'idea64.exe 路径（留空自动探测）'),
-									E('input', { style: box, value: ideaDraft, placeholder: '例如 E:\\Program Files\\IntelliJ IDEA 2026.1.1\\bin\\idea64.exe', onChange: (ev) => edit('ideaPath', ev.target.value) })),
-								E('div', null,
+									E('input', { name: 'ideaPath', style: box, defaultValue: textOf('ideaPath'), placeholder: '例如 E:\\Program Files\\IntelliJ IDEA 2026.1.1\\bin\\idea64.exe' })),
+								E('label', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, '会话相对路径解析根（可选）'),
-									E('input', { style: box, value: rootDraft, placeholder: '例如 C:\\Users\\your-name\\Desktop\\bss', onChange: (ev) => edit('workspaceRoot', ev.target.value) })),
-								E('div', null,
+									E('input', { name: 'workspaceRoot', style: box, defaultValue: textOf('workspaceRoot'), placeholder: '例如 C:/Users/your-name/Desktop/bss' })),
+								E('label', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, '文件名搜索的附加项目根（每行一个）'),
-									E('textarea', { style: { ...box, minHeight: 72 }, value: rootsDraft, onChange: (ev) => edit('searchRootsText', ev.target.value) })),
-								E('button', {
-									style: 'justify-self:start;padding:6px 16px;border:none;border-radius:7px;cursor:pointer;font-size:12.5px;font-family:inherit;background:var(--dsw-alias-button-primary-fill, #0f1115);color:var(--dsw-alias-label-primary-foreground, #fff)',
-									onClick: save,
-								}, '保存'),
+									E('textarea', { name: 'searchRoots', style: { ...box, minHeight: 72 }, defaultValue: linesOf('searchRoots') })),
+								E('label', null,
+									E('div', { style: { marginBottom: 4, opacity: .75 } }, '其他编辑器（每行：名称=exe路径）'),
+									E('textarea', { name: 'editors', style: { ...box, minHeight: 72 }, defaultValue: linesOf('editors'), placeholder: '例如 VS Code=C:/Tools/Code.exe' })),
+								E('button', { type: 'submit', style: { justifySelf: 'start', padding: '6px 16px', border: 'none', borderRadius: 7, cursor: 'pointer', fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-button-primary-fill, #0f1115)', color: 'var(--dsw-alias-label-primary-foreground, #fff)' } }, '保存'),
 							);
 						}
 						ctx.slots.inject('settings.section', () => ctx.slots.register({
@@ -497,11 +497,6 @@ window.__ModuleLoader__.load({
 							order: 81,
 							registrant: '@local/chat-idea-jump',
 						}, () => E(ConfigSection)));
-						ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
-							name: 'settings.section.icon',
-							id: 'chat-idea-jump',
-							registrant: '@local/chat-idea-jump',
-						}, ({ size } = {}) => E('span', { style: { fontSize: size ?? 16, lineHeight: 1 } }, '🦤')));
 					}
 				} catch { /* 设置导航不可用时跳过，插件页卡片仍是备选 */ }
 

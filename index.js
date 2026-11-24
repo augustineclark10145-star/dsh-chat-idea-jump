@@ -1,9 +1,9 @@
 /**
  * @local/chat-idea-jump — host 半。
  *
- * 只做一件事：接收 client 发来的 dsh-resource://file/ 地址（+行号），
- * 解析成本地绝对路径，调 idea64.exe --line N <file> 在 IDEA 里打开。
- * 路由：POST /api/chat-idea-jump/open、GET /api/chat-idea-jump/state。
+ * 接收 file:/// 绝对路径或 dsh-resource://file/ 地址（+行号），解析成本地文件，
+ * 用 IDEA / VS Code / Trae / Sublime 等已装编辑器打开。
+ * 路由：POST /api/chat-idea-jump/open、POST /api/chat-idea-jump/resolve、GET /api/chat-idea-jump/state。
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -13,13 +13,14 @@ import { fileURLToPath } from 'node:url';
 import Schema from '@deepseek-ai/schemastery';
 
 /**
- * 设置页表单（设置 → 插件 → 聊天跳IDEA）。普通字段：修改后插件自动重启生效。
- * ideaPath 留空 = 自动探测；searchRoots 是文件名搜索的附加项目根。
+ * 设置页表单（设置 → 聊天跳IDEA）。普通字段：修改后插件自动重启生效。
+ * ideaPath 留空 = 自动探测；editors 是额外编辑器，每行「名称=exe路径」。
  */
 export const Config = Schema.object({
 	ideaPath: Schema.string().default('').description('idea64.exe 路径，留空自动探测'),
 	workspaceRoot: Schema.string().default('').description('会话相对路径的解析根'),
 	searchRoots: Schema.array(Schema.string()).default([]).description('文件名搜索的附加根目录'),
+	editors: Schema.array(Schema.string()).default([]).description('额外编辑器，每项格式：名称=exe路径'),
 });
 
 export const name = '@local/chat-idea-jump';
@@ -127,6 +128,74 @@ export function findIdeaExecutable(configured) {
 		try { if (fs.existsSync(exe)) return exe; } catch { /* 继续 */ }
 	}
 	return null;
+}
+
+/** 常见编辑器：显式配置优先，其次自动探测本机安装位置。 */
+export function findEditors(config = {}) {
+	const list = [];
+	const add = (id, label, exe, kind) => {
+		if (typeof exe !== 'string' || !isFile(exe)) return;
+		const key = exe.toLowerCase();
+		if (list.some((item) => item.path.toLowerCase() === key)) return;
+		list.push({ id, label, path: exe, kind });
+	};
+	const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+	const programDirs = [process.env.PROGRAMFILES, process.env['ProgramFiles(x86)'], 'C:\\Program Files', 'D:\\Program Files', 'E:\\Program Files'].filter(Boolean);
+	add('idea', 'IDEA', findIdeaExecutable(config?.ideaPath), 'idea');
+	for (const root of programDirs) add('vscode', 'VS Code', path.join(root, 'Microsoft VS Code', 'Code.exe'), 'vscode');
+	for (const root of [local, ...programDirs]) {
+		add('vscode', 'VS Code', path.join(root, 'Programs', 'Microsoft VS Code', 'Code.exe'), 'vscode');
+		add('trae', 'Trae CN', path.join(root, 'Programs', 'Trae CN', 'Trae CN.exe'), 'vscode');
+		add('trae', 'Trae', path.join(root, 'Programs', 'Trae', 'Trae.exe'), 'vscode');
+		add('cursor', 'Cursor', path.join(root, 'Programs', 'Cursor', 'Cursor.exe'), 'vscode');
+		add('qoder', 'Qoder', path.join(root, 'Programs', 'Qoder', 'Qoder.exe'), 'vscode');
+		add('codebuddy', 'CodeBuddy', path.join(root, 'Programs', 'CodeBuddy CN', 'CodeBuddy CN.exe'), 'vscode');
+	}
+	add('sublime', 'Sublime Text', 'C:\\Program Files\\Sublime Text\\subl.exe', 'sublime');
+	// Markdown 专用编辑器：Typora 常见装在 C:/E: 的 Program Files (x86) 或 Program Files。
+	for (const root of ['C:\\Program Files\\Typora', 'E:\\Program Files (x86)\\Typora', 'C:\\Program Files (x86)\\Typora', 'D:\\Program Files (x86)\\Typora', 'D:\\Program Files\\Typora', 'E:\\Program Files\\Typora']) {
+		add('typora', 'Typora', path.join(root, 'Typora.exe'), 'typora');
+	}
+	for (const raw of Array.isArray(config?.editors) ? config.editors : []) {
+		const text = String(raw ?? '').trim();
+		if (!text) continue;
+		const eq = text.indexOf('=');
+		const label = (eq > 0 ? text.slice(0, eq).trim() : path.basename(text)).replace(/\.exe$/i, '');
+		const exe = eq > 0 ? text.slice(eq + 1).trim() : text;
+		const lower = exe.toLowerCase();
+		const kind = /typora|marktext|zettlr|obsidian/.test(lower) ? 'markdown' : /subl/.test(lower) ? 'sublime' : /idea|webstorm|pycharm|goland|rider|rustrover|phpstorm/.test(lower) ? 'idea' : /code|trae|cursor|windsurf|qoder|codebuddy/.test(lower) ? 'vscode' : 'idea';
+		add(`custom-${list.length}`, label || '自定义编辑器', exe, kind);
+	}
+	return list;
+}
+
+/** Electron 编辑器会继承 DSH 的 ELECTRON_RUN_AS_NODE=1 变成 Node 直接退出，启动前必须清掉。 */
+function editorEnvironment() {
+	const env = { ...process.env };
+	delete env.ELECTRON_RUN_AS_NODE;
+	delete env.ELECTRON_NO_ATTACH_CONSOLE;
+	return env;
+}
+
+/** 按编辑器类型拼命令行：JetBrains 用 --line，VS Code 系用 --goto file:line，Sublime 用 file:line。 */
+export function openInEditor(editor, file, line) {
+	const args = [];
+	const n = Number.isFinite(line) && line > 0 ? Math.trunc(line) : null;
+	if (editor.kind === 'vscode') {
+		if (n) args.push('--goto', `${file}:${n}`);
+		else args.push(file);
+	} else if (editor.kind === 'markdown' || editor.kind === 'typora') {
+		args.push(file);
+	} else if (editor.kind === 'sublime') {
+		args.push(n ? `${file}:${n}` : file);
+	} else {
+		if (n) args.push('--line', String(n));
+		args.push(file);
+	}
+	const child = spawn(editor.path, args, { detached: true, stdio: 'ignore', env: editorEnvironment() });
+	child.on('error', () => { /* 失败靠返回值兜底，不让进程崩溃 */ });
+	child.unref();
+	return child.pid ?? null;
 }
 
 /** 收集候选根目录：显式配置 → 当前会话 cwd → DSH 工作区/工作目录服务 → 进程 cwd。 */
@@ -239,7 +308,7 @@ export function openInIdea(exe, file, line) {
 	const args = [];
 	if (Number.isFinite(line) && line > 0) args.push('--line', String(Math.trunc(line)));
 	args.push(file);
-	const child = spawn(exe, args, { detached: true, stdio: 'ignore' });
+	const child = spawn(exe, args, { detached: true, stdio: 'ignore', env: editorEnvironment() });
 	child.on('error', () => { /* 失败靠返回值兜底，不让进程崩溃 */ });
 	child.unref();
 	return child.pid ?? null;
@@ -272,12 +341,35 @@ export function apply(ctx, config = {}) {
 		};
 
 		route('GET', 'state', (_req, res) => {
+			const editors = findEditors(config);
 			sendJson(res, 200, {
 				ok: true,
 				ideaPath: findIdeaExecutable(config?.ideaPath),
+				editors: editors.map(({ id, label, kind }) => ({ id, label, kind, markdownOnly: kind === 'typora' || kind === 'markdown' })),
 				workspaceRoot: config?.workspaceRoot || '',
 				roots: candidateRoots(ctx, config).slice(0, 5),
+				config: {
+					ideaPath: config?.ideaPath ?? '',
+					workspaceRoot: config?.workspaceRoot ?? '',
+					searchRoots: Array.isArray(config?.searchRoots) ? config.searchRoots : [],
+					editors: Array.isArray(config?.editors) ? config.editors : [],
+				},
 			});
+		});
+
+		/** 保存配置：走 DSH configEditor，插件会按 Loader 正常生命周期重启。 */
+		route('POST', 'config', async (req, res) => {
+			const body = await readJson(req);
+			const editor = ctx.get?.('configEditor');
+			const entry = ctx.fiber?.entry;
+			if (!editor || typeof editor.edit !== 'function' || !entry) throw new Error('configEditor 不可用，无法保存配置');
+			const patch = {};
+			if (typeof body?.ideaPath === 'string') patch.ideaPath = body.ideaPath.trim();
+			if (typeof body?.workspaceRoot === 'string') patch.workspaceRoot = body.workspaceRoot.trim();
+			if (Array.isArray(body?.searchRoots)) patch.searchRoots = body.searchRoots.filter((v) => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
+			if (Array.isArray(body?.editors)) patch.editors = body.editors.filter((v) => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
+			await editor.edit(entry, (current) => ({ ...current, ...patch }));
+			sendJson(res, 200, { ok: true });
 		});
 
 		/** 统一解析：body.path（文本/相对/绝对/file:// URL）→ body.address（dsh-resource 地址） */
@@ -333,12 +425,13 @@ export function apply(ctx, config = {}) {
 				});
 				return;
 			}
-			const exe = findIdeaExecutable(config?.ideaPath);
-			if (!exe) { sendJson(res, 500, { ok: false, error: '没找到 idea64.exe，请配置 ideaPath' }); return; }
+			const editors = findEditors(config);
+			const editor = editors.find((item) => item.id === body?.editor) || editors[0];
+			if (!editor) { sendJson(res, 500, { ok: false, error: '没有可用的编辑器，请在设置里配置 ideaPath 或 editors' }); return; }
 			const line = Number(body?.line);
-			const pid = openInIdea(exe, file, Number.isFinite(line) ? line : undefined);
-			ctx.logger?.info?.(`@local/chat-idea-jump: IDEA 打开 ${file}${Number.isFinite(line) ? `:${Math.trunc(line)}` : ''}`);
-			sendJson(res, 200, { ok: true, file, line: Number.isFinite(line) ? Math.trunc(line) : null, pid, exe });
+			const pid = openInEditor(editor, file, Number.isFinite(line) ? line : undefined);
+			ctx.logger?.info?.(`@local/chat-idea-jump: ${editor.label} 打开 ${file}${Number.isFinite(line) ? `:${Math.trunc(line)}` : ''}`);
+			sendJson(res, 200, { ok: true, file, line: Number.isFinite(line) ? Math.trunc(line) : null, editor: editor.label, pid, exe: editor.path });
 		});
 	};
 
