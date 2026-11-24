@@ -164,13 +164,13 @@ window.__ModuleLoader__.load({
 		}
 
 		return {
-			inject: ['sessions', 'slots', 'configForms', 'contextMenus', 'sidebarRight'],
+			inject: ['sessions', 'slots', 'contextMenus', 'sidebarRight'],
 			apply(ctx) {
 				let menu = null;
 				let cleanups = [];
 				let lastMouse = { x: 200, y: 200 };
 				let editorList = [{ id: 'idea', label: 'IDEA', kind: 'idea' }];
-				let configState = { ideaPath: '', workspaceRoot: '', searchRoots: [], editors: [] };
+				let configState = { ideaPath: '', editors: [] };
 
 				// 菜单里的编辑器列表来自 host 自动探测 + 设置页额外配置；失败就保留 IDEA 兜底。
 				void fetch('/api/chat-idea-jump/state').then((res) => res.json()).then((data) => {
@@ -378,76 +378,6 @@ window.__ModuleLoader__.load({
 					}
 				} catch { /* 菜单服务不可用就只保留点击选择框 */ }
 
-				/** 设置 → 插件 页的配置卡片（plugins.bundle.config 插槽，契约同 gitbash-shell） */
-				try {
-					if (ctx.slots && typeof ctx.slots.inject === 'function') {
-						const formScope = svc(ctx, 'configForms')?.get?.('@local/chat-idea-jump') ?? null;
-						ctx.effect(() => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
-							name: 'plugins.bundle.config',
-							key: '@local/chat-idea-jump',
-							inject: () => ({ scope: formScope }),
-						}, function BundleConfigCard(props) {
-							const scope = props?.scope;
-							const readSnap = () => { try { return scope?.getSnapshot?.() ?? {}; } catch { return {}; } };
-							const [snap, setSnap] = React.useState(() => readSnap());
-							const [draft, setDraft] = React.useState(null);
-							const [status, setStatus] = React.useState('');
-							React.useEffect(() => {
-								if (typeof scope?.subscribe !== 'function') return undefined;
-								const un = scope.subscribe(() => { try { setSnap(readSnap()); } catch { /* 忽略 */ } });
-								return typeof un === 'function' ? un : undefined;
-							}, [scope]);
-							const cfg = snap.value && typeof snap.value === 'object' ? snap.value : {};
-							const snapRoots = Array.isArray(cfg.searchRoots) ? cfg.searchRoots : [];
-							const value = (key, fallback) => draft && key in draft ? draft[key] : fallback;
-							const ideaDraft = value('ideaPath', cfg.ideaPath ?? '');
-							const rootDraft = value('workspaceRoot', cfg.workspaceRoot ?? '');
-							const rootsDraft = value('searchRootsText', snapRoots.join('\n'));
-							const editorsDraft = value('editorsText', (Array.isArray(cfg.editors) ? cfg.editors : []).join('\n'));
-							const edit = (key, v) => setDraft({
-								ideaPath: ideaDraft, workspaceRoot: rootDraft, searchRootsText: rootsDraft, editorsText: editorsDraft, [key]: v,
-							});
-							const save = async () => {
-								if (!scope || typeof scope.set !== 'function') { setStatus('保存不可用：scope 缺失'); return; }
-								const searchRoots = String(rootsDraft).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-								const entries = [['ideaPath', String(ideaDraft).trim()], ['workspaceRoot', String(rootDraft).trim()], ['searchRoots', searchRoots], ['editors', String(editorsDraft).split(/\r?\n/).map((s) => s.trim()).filter(Boolean)]];
-								try {
-									for (const [key, v] of entries) {
-										const accepted = await Promise.resolve(scope.set(key, v));
-										if (accepted !== true) { setStatus(`保存被拒绝：${key}`); return; }
-									}
-									setStatus('已保存，插件正在重启生效…');
-									setDraft(null);
-									setTimeout(() => setStatus(''), 4000);
-								} catch (error) {
-									setStatus(`保存失败：${String(error?.message ?? error)}`);
-								}
-							};
-							const inputStyle = { width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))', borderRadius: 6, fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, #222)' };
-							return E('div', { style: { display: 'grid', gap: '10px', padding: '4px 2px', fontSize: '12.5px', fontFamily: 'inherit' } },
-								E('div', null,
-									E('div', { style: { marginBottom: 4, opacity: .75 } }, 'idea64.exe 路径（留空自动探测）'),
-									E('input', { style: inputStyle, value: ideaDraft, placeholder: '例如 E:\\Program Files\\IntelliJ IDEA 2026.1.1\\bin\\idea64.exe', onChange: (ev) => edit('ideaPath', ev.target.value) })),
-								E('div', null,
-									E('div', { style: { marginBottom: 4, opacity: .75 } }, '会话相对路径解析根（可选）'),
-									E('input', { style: inputStyle, value: rootDraft, placeholder: '例如 C:\\Users\\your-name\\Desktop\\bss', onChange: (ev) => edit('workspaceRoot', ev.target.value) })),
-								E('div', null,
-									E('div', { style: { marginBottom: 4, opacity: .75 } }, '文件名搜索的附加项目根（每行一个）'),
-									E('textarea', { style: { ...{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))', borderRadius: 6, fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, #222)' }, minHeight: 64 }, value: rootsDraft, onChange: (ev) => edit('searchRootsText', ev.target.value) })),
-								E('div', null,
-									E('div', { style: { marginBottom: 4, opacity: .75 } }, '其他编辑器（每行：名称=exe路径）'),
-									E('textarea', { style: { ...{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))', borderRadius: 6, fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, #222)' }, minHeight: 64 }, value: editorsDraft, placeholder: '例如 VS Code=C:/Tools/Code.exe', onChange: (ev) => edit('editorsText', ev.target.value) })),
-								E('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
-									E('button', {
-										style: { padding: '6px 16px', border: 'none', borderRadius: 7, cursor: 'pointer', fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-button-primary-fill, #0f1115)', color: 'var(--dsw-alias-label-primary-foreground, #fff)' },
-										onClick: save,
-									}, '保存'),
-									status ? E('span', { style: { opacity: .75 } }, status) : null),
-							);
-						})));
-					}
-				} catch { /* 设置页插槽不可用时跳过，不影响主功能 */ }
-
 				/** 设置导航项（settings.section，契约同 sidenote）+ 配置表单 */
 				try {
 					if (ctx.slots && typeof ctx.slots.inject === 'function') {
@@ -461,8 +391,6 @@ window.__ModuleLoader__.load({
 								const read = (name) => event.currentTarget.elements?.[name]?.value ?? '';
 								const values = {
 									ideaPath: read('ideaPath').trim(),
-									workspaceRoot: read('workspaceRoot').trim(),
-									searchRoots: read('searchRoots').split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
 									editors: read('editors').split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
 								};
 								try {
@@ -478,12 +406,6 @@ window.__ModuleLoader__.load({
 								E('label', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, 'idea64.exe 路径（留空自动探测）'),
 									E('input', { name: 'ideaPath', style: box, defaultValue: textOf('ideaPath'), placeholder: '例如 E:\\Program Files\\IntelliJ IDEA 2026.1.1\\bin\\idea64.exe' })),
-								E('label', null,
-									E('div', { style: { marginBottom: 4, opacity: .75 } }, '会话相对路径解析根（可选）'),
-									E('input', { name: 'workspaceRoot', style: box, defaultValue: textOf('workspaceRoot'), placeholder: '例如 C:/Users/your-name/Desktop/bss' })),
-								E('label', null,
-									E('div', { style: { marginBottom: 4, opacity: .75 } }, '文件名搜索的附加项目根（每行一个）'),
-									E('textarea', { name: 'searchRoots', style: { ...box, minHeight: 72 }, defaultValue: linesOf('searchRoots') })),
 								E('label', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, '其他编辑器（每行：名称=exe路径）'),
 									E('textarea', { name: 'editors', style: { ...box, minHeight: 72 }, defaultValue: linesOf('editors'), placeholder: '例如 VS Code=C:/Tools/Code.exe' })),

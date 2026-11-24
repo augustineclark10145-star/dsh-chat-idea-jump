@@ -1,6 +1,6 @@
 {
   "name": "@local/chat-idea-jump",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "private": true,
   "type": "module",
   "description": "聊天里的文件引用点击弹出选择：右侧栏打开（定位行号）或 IDEA 打开（idea64.exe --line）",

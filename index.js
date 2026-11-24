@@ -286,34 +286,6 @@ export function resolveTarget(ctx, config, parsed, sessionId = parsed?.sessionId
 	return null;
 }
 
-/** 文本路径（无地址）→ 按文件名在配置根/候选根/桌面里搜索。 */
-export function resolveByName(ctx, config, name, sessionId) {
-	if (!name) return null;
-	const roots = [];
-	const extras = config?.searchRoots;
-	if (Array.isArray(extras)) for (const r of extras) if (typeof r === 'string' && r.trim()) roots.push(r.trim());
-	else if (typeof extras === 'string' && extras.trim()) for (const r of extras.split(/[;,]/)) if (r.trim()) roots.push(r.trim());
-	roots.push(...candidateRoots(ctx, config, sessionId));
-	try { roots.push(path.join(os.homedir(), 'Desktop')); } catch { /* 忽略 */ }
-	// 单趟扫描（精确优先、前缀兜底），逐根尝试
-	for (const root of roots) {
-		try { if (!fs.statSync(root).isDirectory()) continue; } catch { continue; }
-		const hit = searchByName(root, name);
-		if (hit) return hit;
-	}
-	return null;
-}
-
-export function openInIdea(exe, file, line) {
-	const args = [];
-	if (Number.isFinite(line) && line > 0) args.push('--line', String(Math.trunc(line)));
-	args.push(file);
-	const child = spawn(exe, args, { detached: true, stdio: 'ignore', env: editorEnvironment() });
-	child.on('error', () => { /* 失败靠返回值兜底，不让进程崩溃 */ });
-	child.unref();
-	return child.pid ?? null;
-}
-
 export function apply(ctx, config = {}) {
 	const disposers = [];
 	const mount = (rawServer) => {
