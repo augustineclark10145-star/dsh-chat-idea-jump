@@ -369,10 +369,10 @@ window.__ModuleLoader__.load({
 						}, function BundleConfigCard(props) {
 							const scope = props?.scope;
 							const readSnap = () => { try { return scope?.getSnapshot?.() ?? {}; } catch { return {}; } };
-							const [snap, setSnap] = E.useState(() => readSnap());
-							const [draft, setDraft] = E.useState(null);
-							const [status, setStatus] = E.useState('');
-							E.useEffect(() => {
+							const [snap, setSnap] = React.useState(() => readSnap());
+							const [draft, setDraft] = React.useState(null);
+							const [status, setStatus] = React.useState('');
+							React.useEffect(() => {
 								if (typeof scope?.subscribe !== 'function') return undefined;
 								const un = scope.subscribe(() => { try { setSnap(readSnap()); } catch { /* 忽略 */ } });
 								return typeof un === 'function' ? un : undefined;
@@ -428,11 +428,11 @@ window.__ModuleLoader__.load({
 				try {
 					if (ctx.slots && typeof ctx.slots.inject === 'function') {
 						function ConfigSection() {
-							const [form, setForm] = E.useState(null);
-							const [snap, setSnap] = E.useState({});
-							const [draft, setDraft] = E.useState(null);
-							const [status, setStatus] = E.useState('');
-							E.useEffect(() => {
+							const [form, setForm] = React.useState(null);
+							const [snap, setSnap] = React.useState({});
+							const [draft, setDraft] = React.useState(null);
+							const [status, setStatus] = React.useState('');
+							React.useEffect(() => {
 								let un;
 								try {
 									const forms = ctx.get?.('configForms');
