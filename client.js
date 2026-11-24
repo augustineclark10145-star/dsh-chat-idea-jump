@@ -490,18 +490,18 @@ window.__ModuleLoader__.load({
 								}, '保存'),
 							);
 						}
-						ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
+						ctx.slots.inject('settings.section', () => ctx.slots.register({
 							name: 'settings.section',
 							id: 'chat-idea-jump',
 							label: '聊天跳IDEA',
 							order: 81,
 							registrant: '@local/chat-idea-jump',
-						}, () => E(ConfigSection))));
-						ctx.effect(() => ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
+						}, () => E(ConfigSection)));
+						ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
 							name: 'settings.section.icon',
 							id: 'chat-idea-jump',
 							registrant: '@local/chat-idea-jump',
-						}, ({ size } = {}) => E('span', { style: { fontSize: size ?? 16, lineHeight: 1 } }, '🦤'))));
+						}, ({ size } = {}) => E('span', { style: { fontSize: size ?? 16, lineHeight: 1 } }, '🦤')));
 					}
 				} catch { /* 设置导航不可用时跳过，插件页卡片仍是备选 */ }
 
