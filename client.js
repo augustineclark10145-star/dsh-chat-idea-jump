@@ -121,11 +121,20 @@ window.__ModuleLoader__.load({
 					body: JSON.stringify(payload),
 				});
 				const data = await res.json().catch(() => ({}));
-				if (data.ok) toast(`已在 ${data.editor || '编辑器'} 打开 ${data.file}${data.line ? `:${data.line}` : ''}`);
-				else toast(`打开失败：${data.error || res.status}`, true);
+				if (data.ok) {
+					if (data.action === 'reveal') toast(`已在资源管理器中定位 ${data.file}`);
+					else toast(`已在 ${data.editor || '编辑器'} 打开 ${data.file}${data.line ? `:${data.line}` : ''}`);
+				} else {
+					toast(`${data.action === 'reveal' ? '定位' : '打开'}失败：${data.error || res.status}`, true);
+				}
 			} catch (error) {
 				toast(`请求失败：${String(error?.message ?? error)}`, true);
 			}
+		}
+
+		/** 在系统资源管理器里定位这个文件（只弹文件夹，不打开编辑器）。 */
+		function revealAction(info) {
+			return ['在资源管理器中定位', '', () => { void ideaOpen({ ...info, action: 'reveal' }); }];
 		}
 
 		function buildMenu() {
@@ -295,8 +304,9 @@ window.__ModuleLoader__.load({
 					e.stopPropagation();
 					const title = `${info.path}${info.line ? `:${info.line}${info.lineEnd ? `-${info.lineEnd}` : ''}` : ''}`;
 					showChooser(e.clientX, e.clientY, title, [
-						...editorActions({ path: info.path, line: info.line, lineEnd: info.lineEnd, sessionId: currentSessionIdOf(ctx) }),
 						['右侧栏打开', info.line ? `定位 ${info.line} 行` : '', () => { void openRight({ path: info.path, line: info.line }); }],
+						revealAction({ path: info.path, sessionId: currentSessionIdOf(ctx) }),
+						...editorActions({ path: info.path, line: info.line, lineEnd: info.lineEnd, sessionId: currentSessionIdOf(ctx) }),
 					]);
 					return true;
 				}
@@ -317,6 +327,9 @@ window.__ModuleLoader__.load({
 					const label = info.path ? basenameOf('dsh-resource://file/' + info.path.replace(/\\/g, '/')) : basenameOf(info.address);
 					showChooser(e.clientX, e.clientY, `${label}${info.line ? `:${info.line}` : ''}`, [
 						['右侧栏打开', info.line ? `定位 ${info.line} 行` : '', () => { void openRight(info); }, true],
+						revealAction(info.address
+							? { address: info.address }
+							: { path: info.path, sessionId: currentSessionIdOf(ctx) }),
 						...editorActions(info.address
 							? { address: info.address, line: info.line, lineEnd: info.lineEnd }
 							: { path: info.path, line: info.line, lineEnd: info.lineEnd, sessionId: currentSessionIdOf(ctx) }),

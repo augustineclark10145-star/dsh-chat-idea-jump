@@ -328,6 +328,17 @@ function editorEnvironment() {
 	return env;
 }
 
+/**
+ * 在系统资源管理器里定位文件：Windows 用 `explorer /select,"路径"`。
+ * 不是用编辑器打开，只是把文件夹窗口弹出来并选中那个文件。
+ */
+export function revealInExplorer(file) {
+	const child = spawn('explorer.exe', [`/select,${file}`], { detached: true, stdio: 'ignore' });
+	child.on('error', () => { /* 失败靠返回值兜底 */ });
+	child.unref();
+	return child.pid ?? null;
+}
+
 /** 按编辑器类型拼命令行：JetBrains 用 --line，VS Code 系用 --goto file:line，Sublime 用 file:line。 */
 export function openInEditor(editor, file, line) {
 	const args = [];
@@ -558,6 +569,13 @@ export function apply(ctx, config = {}) {
 					error: '文件没找到。可在 profile 的 cordis.patch.yml 里给 dsh-chat-idea-jump 配置 searchRoots（项目根数组）后重启。',
 					addressPath: parsed?.path ?? body?.path ?? null,
 				});
+				return;
+			}
+			// action: 'reveal' = 在资源管理器里定位文件，不用编辑器打开。
+			if (body?.action === 'reveal') {
+				const pid = revealInExplorer(file);
+				ctx.logger?.info?.(`dsh-chat-idea-jump: 资源管理器定位 ${file}`);
+				sendJson(res, 200, { ok: true, file, action: 'reveal', pid });
 				return;
 			}
 			const editors = enabledEditors(config);
