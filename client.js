@@ -169,13 +169,24 @@ window.__ModuleLoader__.load({
 				let menu = null;
 				let cleanups = [];
 				let lastMouse = { x: 200, y: 200 };
+				// 全部检测到的编辑器（含未勾选），设置页据此渲染清单。
+				let allEditors = [{ id: 'idea', label: 'IDEA', kind: 'idea', enabled: true }];
+				// 菜单实际可用的：只取勾选过的。
 				let editorList = [{ id: 'idea', label: 'IDEA', kind: 'idea' }];
-				let configState = { ideaPath: '', editors: [] };
+				let configState = { ideaPath: '', editors: [], hiddenEditors: [] };
+
+				/** 勾选状态变化后重算菜单列表：一个都没勾就退回全部，避免菜单空掉。 */
+				function syncEnabled() {
+					const on = allEditors.filter((item) => item.enabled !== false);
+					editorList = on.length ? on : allEditors;
+				}
 
 				// 菜单里的编辑器列表来自 host 自动探测 + 设置页额外配置；失败就保留 IDEA 兜底。
 				void fetch('/api/chat-idea-jump/state').then((res) => res.json()).then((data) => {
-					if (Array.isArray(data?.editors) && data.editors.length) editorList = data.editors;
+					// 全部检测到的编辑器（含未勾选）：设置页按 enabled 渲染清单。
+					if (Array.isArray(data?.editors) && data.editors.length) allEditors = data.editors;
 					if (data?.config && typeof data.config === 'object') configState = data.config;
+					syncEnabled();
 				}).catch(() => { /* 保留默认 IDEA */ });
 
 				document.addEventListener('mousemove', (e) => { lastMouse = { x: e.clientX, y: e.clientY }; }, { passive: true });
@@ -211,7 +222,7 @@ window.__ModuleLoader__.load({
 					];
 				}
 
-				/** 每个已探测/配置的编辑器一条菜单项；没有就退回 IDEA。 */
+				/** 每个已勾选的编辑器一条菜单项；没有就退回 IDEA。 */
 				function editorActions(info) {
 					const target = String(info?.path || info?.address || '');
 					const isMarkdown = /\.md(?:$|[?#:])/i.test(target);
@@ -383,16 +394,26 @@ window.__ModuleLoader__.load({
 					if (ctx.slots && typeof ctx.slots.inject === 'function') {
 						function ConfigSection() {
 							const cfg = configState;
-							const textOf = (key) => String(cfg[key] ?? '');
-							const linesOf = (key) => Array.isArray(cfg[key]) ? cfg[key].join('\n') : '';
-							const box = { width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))', borderRadius: 6, fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, #222)' };
+							const all = Array.isArray(allEditors) ? allEditors : [];
+							const hidden = new Set((Array.isArray(cfg.hiddenEditors) ? cfg.hiddenEditors : []).map((v) => String(v).toLowerCase()));
+							const box = { width: '100%', boxSizing: 'border-box', padding: '5px 7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))', borderRadius: 6, fontSize: '12px', fontFamily: 'inherit', background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, #222)' };
+							const rowStyle = { display: 'grid', gridTemplateColumns: '16px 92px 1fr', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.14))' };
+							const nameStyle = { fontSize: '12.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+
+							/** 保存：勾选框决定 hiddenEditors，路径输入框决定 editors。 */
 							const save = async (event) => {
 								event.preventDefault();
-								const read = (name) => event.currentTarget.elements?.[name]?.value ?? '';
-								const values = {
-									ideaPath: read('ideaPath').trim(),
-									editors: read('editors').split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
-								};
+								const form = event.currentTarget;
+								const hiddenIds = [];
+								const lines = [];
+								for (const input of form.querySelectorAll('input[data-editor-id]')) {
+									if (!input.checked) hiddenIds.push(input.dataset.editorId);
+									const value = String(input.value || '').trim();
+									// 用户填/改过路径的行才写进 editors，避免把探测结果固化成配置。
+									if (value && value !== String(input.dataset.detected || '')) lines.push(`${input.dataset.editorLabel}=${value}`);
+								}
+								const extra = String(form.elements?.editors?.value ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+								const values = { ideaPath: String(form.elements?.ideaPath?.value ?? '').trim(), editors: lines.concat(extra), hiddenEditors: hiddenIds };
 								try {
 									const res = await fetch('/api/chat-idea-jump/config', {
 										method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
@@ -402,13 +423,39 @@ window.__ModuleLoader__.load({
 									toast('已保存，插件正在重启生效…');
 								} catch (error) { toast(`保存失败：${String(error?.message ?? error)}`, true); }
 							};
-							return E('form', { onSubmit: save, style: { display: 'grid', gap: '12px', maxWidth: 560, fontSize: '12.5px', fontFamily: 'inherit' } },
-								E('label', null,
-									E('div', { style: { marginBottom: 4, opacity: .75 } }, 'idea64.exe 路径（留空自动探测）'),
-									E('input', { name: 'ideaPath', style: box, defaultValue: textOf('ideaPath'), placeholder: '例如 E:\\Program Files\\IntelliJ IDEA 2026.1.1\\bin\\idea64.exe' })),
+
+							const rows = all.map((editor) => E('div', { key: editor.id, style: rowStyle },
+								E('input', {
+									type: 'checkbox',
+									'data-editor-id': editor.id,
+									'data-editor-label': editor.label,
+									defaultChecked: !hidden.has(String(editor.id).toLowerCase()),
+									title: '打勾即显示在菜单里',
+									style: { width: 14, height: 14, margin: 0, cursor: 'pointer' },
+								}),
+								E('span', { style: nameStyle, title: editor.label }, editor.label),
+								E('input', {
+									type: 'text',
+									'data-editor-id': editor.id,
+									'data-editor-label': editor.label,
+									'data-detected': editor.path || '',
+									defaultValue: editor.path || '',
+									placeholder: editor.found ? '' : '未检测到，可填 exe 路径',
+									style: box,
+								})));
+
+							return E('form', { onSubmit: save, style: { display: 'grid', gap: '14px', maxWidth: 660, fontSize: '12.5px', fontFamily: 'inherit' } },
+								E('div', null,
+									E('div', { style: { marginBottom: 4, opacity: .75 } }, `编辑器（打勾即显示在菜单里，共 ${all.length} 项）`),
+									E('div', null, rows)),
 								E('label', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, '其他编辑器（每行：名称=exe路径）'),
-									E('textarea', { name: 'editors', style: { ...box, minHeight: 72 }, defaultValue: linesOf('editors'), placeholder: '例如 VS Code=C:/Tools/Code.exe' })),
+									E('textarea', {
+										name: 'editors',
+										style: { ...box, minHeight: 56 },
+										defaultValue: (Array.isArray(cfg.editors) ? cfg.editors : []).join('\n'),
+										placeholder: '清单里没有的编辑器写这里，例如 Cursor=D:/Tools/Cursor/Cursor.exe',
+									})),
 								E('button', { type: 'submit', style: { justifySelf: 'start', padding: '6px 16px', border: 'none', borderRadius: 7, cursor: 'pointer', fontSize: '12.5px', fontFamily: 'inherit', background: 'var(--dsw-alias-button-primary-fill, #0f1115)', color: 'var(--dsw-alias-label-primary-foreground, #fff)' } }, '保存'),
 							);
 						}

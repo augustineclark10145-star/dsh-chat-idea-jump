@@ -21,6 +21,7 @@ export const Config = Schema.object({
 	workspaceRoot: Schema.string().default('').description('会话相对路径的解析根'),
 	searchRoots: Schema.array(Schema.string()).default([]).description('文件名搜索的附加根目录'),
 	editors: Schema.array(Schema.string()).default([]).description('额外编辑器，每项格式：名称=exe路径'),
+	hiddenEditors: Schema.array(Schema.string()).default([]).description('设置页里取消勾选的编辑器 id，不进菜单'),
 });
 
 export const name = 'dsh-chat-idea-jump';
@@ -99,74 +100,218 @@ function requestRejection(req) {
 	return undefined;
 }
 
-/** 探测 idea64.exe：显式配置优先，其次扫描常见 JetBrains 安装位置。 */
+/** 探测 idea64.exe：显式配置优先，其次扫描 JetBrains 安装位置。 */
 export function findIdeaExecutable(configured) {
-	const candidates = [];
-	if (typeof configured === 'string' && configured.trim()) candidates.push(configured.trim());
-	const roots = [];
-	for (const key of ['PROGRAMFILES', 'ProgramFiles(x86)', 'LOCALAPPDATA']) {
-		if (process.env[key]) roots.push(process.env[key]);
+	if (typeof configured === 'string' && configured.trim() && isFile(configured.trim())) return configured.trim();
+	const found = scanJetBrains('IntelliJ IDEA');
+	return found[0]?.path ?? null;
+}
+
+/** JetBrains 产品表：安装目录名前缀、可执行文件名、显示名。 */
+const JETBRAINS_PRODUCTS = [
+	['IntelliJ IDEA', 'idea64.exe', 'IntelliJ IDEA'],
+	['WebStorm', 'webstorm64.exe', 'WebStorm'],
+	['PyCharm', 'pycharm64.exe', 'PyCharm'],
+	['GoLand', 'goland64.exe', 'GoLand'],
+	['CLion', 'clion64.exe', 'CLion'],
+	['PhpStorm', 'phpstorm64.exe', 'PhpStorm'],
+	['RubyMine', 'rubymine64.exe', 'RubyMine'],
+	['Rider', 'rider64.exe', 'Rider'],
+	['DataGrip', 'datagrip64.exe', 'DataGrip'],
+	['RustRover', 'rustrover64.exe', 'RustRover'],
+	['Aqua', 'aqua64.exe', 'Aqua'],
+	['DataSpell', 'dataspell64.exe', 'DataSpell'],
+];
+
+/** 目录里挑出 exe：命中就返回，读不了就跳过。 */
+function probe(dir, exe) {
+	try {
+		const full = path.join(dir, exe);
+		return fs.existsSync(full) && fs.statSync(full).isFile() ? full : null;
+	} catch { return null; }
+}
+
+/** 只读一个目录的子目录名，失败给空数组。 */
+function subdirs(dir) {
+	try {
+		return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+	} catch { return []; }
+}
+
+/** 扫描本机 JetBrains 安装：Program Files 下的产品目录 / JetBrains 目录，以及 Toolbox。 */
+export function scanJetBrains(productName) {
+	const out = [];
+	const seen = new Set();
+	const push = (exe, label) => {
+		if (!exe) return;
+		const key = exe.toLowerCase();
+		if (seen.has(key)) return;
+		seen.add(key);
+		out.push({ path: exe, label });
+	};
+	const products = productName
+		? JETBRAINS_PRODUCTS.filter((row) => row[0] === productName)
+		: JETBRAINS_PRODUCTS;
+	const programRoots = [];
+	for (const key of ['PROGRAMFILES', 'ProgramFiles(x86)']) if (process.env[key]) programRoots.push(process.env[key]);
+	for (const drive of ['C', 'D', 'E', 'F']) {
+		programRoots.push(`${drive}:\\Program Files`);
+		programRoots.push(`${drive}:\\Program Files (x86)`);
 	}
-	for (const drive of ['C', 'D', 'E', 'F']) roots.push(`${drive}:\\Program Files`);
-	const dirs = [];
-	for (const root of roots) {
-		let entries;
-		try { entries = fs.readdirSync(root); } catch { continue; }
-		for (const entry of entries) {
-			const full = path.join(root, entry);
-			if (/^JetBrains$/i.test(entry)) {
-				try {
-					for (const sub of fs.readdirSync(full)) dirs.push(path.join(full, sub));
-				} catch { /* 目录不可读就跳过 */ }
-			} else if (/IntelliJ IDEA/i.test(entry)) {
-				dirs.push(full);
+	for (const root of programRoots) {
+		for (const dir of subdirs(root)) {
+			for (const [product, exe, label] of products) {
+				if (!new RegExp(`^${product}`, 'i').test(dir)) continue;
+				push(probe(path.join(root, dir, 'bin'), exe), label);
+			}
+			if (!/^JetBrains$/i.test(dir)) continue;
+			for (const sub of subdirs(path.join(root, dir))) {
+				for (const [product, exe, label] of products) {
+					if (!new RegExp(`^${product}`, 'i').test(sub)) continue;
+					push(probe(path.join(root, dir, sub, 'bin'), exe), label);
+				}
 			}
 		}
 	}
-	for (const dir of dirs) {
-		const exe = path.join(dir, 'bin', 'idea64.exe');
-		try { if (fs.existsSync(exe)) return exe; } catch { /* 继续 */ }
+	// JetBrains Toolbox：%LOCALAPPDATA%\JetBrains\Toolbox\apps\<产品>\<渠道>\<构建>\bin
+	const toolbox = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'JetBrains', 'Toolbox', 'apps');
+	for (const productDir of subdirs(toolbox)) {
+		const match = products.find(([product]) => new RegExp(`^${product}`, 'i').test(productDir));
+		if (!match) continue;
+		for (const channel of subdirs(path.join(toolbox, productDir))) {
+			for (const build of subdirs(path.join(toolbox, productDir, channel))) {
+				push(probe(path.join(toolbox, productDir, channel, build, 'bin'), match[1]), match[2]);
+			}
+		}
 	}
-	return null;
+	return out;
 }
 
-/** 常见编辑器：显式配置优先，其次自动探测本机安装位置。 */
+/** 本机几个安装根：local（LOCALAPPDATA）与 program（Program Files 各盘）。 */
+function installRoots() {
+	const local = [process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')];
+	const program = [];
+	for (const key of ['PROGRAMFILES', 'ProgramFiles(x86)']) if (process.env[key]) program.push(process.env[key]);
+	for (const drive of ['C', 'D', 'E', 'F']) {
+		program.push(`${drive}:\\Program Files`);
+		program.push(`${drive}:\\Program Files (x86)`);
+	}
+	return { local, program };
+}
+
+/** 已知编辑器：id、显示名、启动方式、候选 exe 路径。 */
+const EDITOR_CATALOG = [
+	{ id: 'vscode', label: 'VS Code', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'Microsoft VS Code', 'Code.exe')).concat(r.program.map((b) => path.join(b, 'Microsoft VS Code', 'Code.exe'))) },
+	{ id: 'vscode-insiders', label: 'VS Code Insiders', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'Microsoft VS Code Insiders', 'Code - Insiders.exe')) },
+	{ id: 'cursor', label: 'Cursor', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'Cursor', 'Cursor.exe')).concat(r.program.map((b) => path.join(b, 'Cursor', 'Cursor.exe'))) },
+	{ id: 'windsurf', label: 'Windsurf', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'Windsurf', 'Windsurf.exe')) },
+	{ id: 'trae', label: 'Trae CN', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'Trae CN', 'Trae CN.exe')).concat(r.local.map((b) => path.join(b, 'Programs', 'Trae', 'Trae.exe'))) },
+	{ id: 'qoder', label: 'Qoder', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'Qoder', 'Qoder.exe')) },
+	{ id: 'codebuddy', label: 'CodeBuddy', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'CodeBuddy CN', 'CodeBuddy CN.exe')).concat(r.program.map((b) => path.join(b, 'CodeBuddy CN', 'CodeBuddy CN.exe'))) },
+	{ id: 'vscodium', label: 'VSCodium', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'VSCodium', 'VSCodium.exe')) },
+	{ id: 'kiro', label: 'Kiro', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'Kiro', 'Kiro.exe')) },
+	{ id: 'zed', label: 'Zed', kind: 'vscode', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'Zed', 'zed.exe')) },
+	{ id: 'sublime', label: 'Sublime Text', kind: 'sublime', paths: (r) => r.program.map((b) => path.join(b, 'Sublime Text', 'subl.exe')).concat(r.program.map((b) => path.join(b, 'Sublime Text 3', 'subl.exe'))) },
+	{ id: 'notepadpp', label: 'Notepad++', kind: 'notepad', paths: (r) => r.program.map((b) => path.join(b, 'Notepad++', 'notepad++.exe')) },
+	{ id: 'typora', label: 'Typora', kind: 'typora', paths: (r) => r.program.map((b) => path.join(b, 'Typora', 'Typora.exe')) },
+	{ id: 'obsidian', label: 'Obsidian', kind: 'typora', paths: (r) => r.local.map((b) => path.join(b, 'Obsidian', 'Obsidian.exe')).concat(r.program.map((b) => path.join(b, 'Obsidian', 'Obsidian.exe'))) },
+	{ id: 'marktext', label: 'MarkText', kind: 'typora', paths: (r) => r.local.map((b) => path.join(b, 'Programs', 'MarkText', 'MarkText.exe')).concat(r.program.map((b) => path.join(b, 'MarkText', 'MarkText.exe'))) },
+	{ id: 'android-studio', label: 'Android Studio', kind: 'idea', paths: (r) => r.program.map((b) => path.join(b, 'Android', 'Android Studio', 'bin', 'studio64.exe')) },
+	{ id: 'eclipse', label: 'Eclipse', kind: 'idea', paths: (r) => r.program.map((b) => path.join(b, 'eclipse', 'eclipse.exe')) },
+];
+
+/** 从「名称=exe路径」里拆出名称与路径；没有等号时名称留空。 */
+function parseEditorLine(raw) {
+	const text = String(raw ?? '').trim();
+	if (!text) return null;
+	const eq = text.indexOf('=');
+	if (eq > 0) return { name: text.slice(0, eq).trim(), exe: text.slice(eq + 1).trim() };
+	return { name: '', exe: text };
+}
+
+/** 按 exe 猜启动方式：不同编辑器拼参数的方式不一样。 */
+function kindOfPath(exe) {
+	const lower = String(exe).toLowerCase();
+	if (/typora|obsidian|marktext|zettlr/.test(lower)) return 'typora';
+	if (/notepad\+\+/.test(lower)) return 'notepad';
+	if (/subl/.test(lower)) return 'sublime';
+	if (/studio64|eclipse|idea|webstorm|pycharm|goland|rider|rustrover|phpstorm|clion|rubymine|datagrip|aqua|dataspell|fleet/.test(lower)) return 'idea';
+	if (/code|trae|cursor|windsurf|qoder|codebuddy|vscodium|kiro|zed/.test(lower)) return 'vscode';
+	return 'idea';
+}
+
+/**
+ * 全部编辑器：自动探测 + 自定义。
+ * 每项带 enabled——设置页勾选状态；未勾选的不进菜单，但设置页仍可见。
+ */
+/**
+ * 全部编辑器清单：固定目录里的每一个都列出来（没探测到也列，path 为空、found=false），
+ * 这样设置页能显示「未检测到」，用户自己填路径即可。
+ * 每项字段：id / label / kind / path（探测或自定义）/ found / enabled。
+ */
 export function findEditors(config = {}) {
+	const roots = installRoots();
+	const hidden = new Set((Array.isArray(config?.hiddenEditors) ? config.hiddenEditors : []).map((v) => String(v).trim().toLowerCase()));
 	const list = [];
-	const add = (id, label, exe, kind) => {
-		if (typeof exe !== 'string' || !isFile(exe)) return;
-		const key = exe.toLowerCase();
-		if (list.some((item) => item.path.toLowerCase() === key)) return;
-		list.push({ id, label, path: exe, kind });
+	const byId = new Map();
+
+	/** 登记一条：同 id 只留第一条，已有路径的不被空路径覆盖。 */
+	const add = (id, label, kind, exe) => {
+		const key = String(id).toLowerCase();
+		const found = typeof exe === 'string' && isFile(exe);
+		const existing = byId.get(key);
+		if (existing) {
+			if (found && !existing.path) { existing.path = exe; existing.found = true; }
+			return existing;
+		}
+		const item = { id: key, label, kind, path: found ? exe : '', found, enabled: !hidden.has(key) };
+		byId.set(key, item);
+		list.push(item);
+		return item;
 	};
-	const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-	const programDirs = [process.env.PROGRAMFILES, process.env['ProgramFiles(x86)'], 'C:\\Program Files', 'D:\\Program Files', 'E:\\Program Files'].filter(Boolean);
-	add('idea', 'IDEA', findIdeaExecutable(config?.ideaPath), 'idea');
-	for (const root of programDirs) add('vscode', 'VS Code', path.join(root, 'Microsoft VS Code', 'Code.exe'), 'vscode');
-	for (const root of [local, ...programDirs]) {
-		add('vscode', 'VS Code', path.join(root, 'Programs', 'Microsoft VS Code', 'Code.exe'), 'vscode');
-		add('trae', 'Trae CN', path.join(root, 'Programs', 'Trae CN', 'Trae CN.exe'), 'vscode');
-		add('trae', 'Trae', path.join(root, 'Programs', 'Trae', 'Trae.exe'), 'vscode');
-		add('cursor', 'Cursor', path.join(root, 'Programs', 'Cursor', 'Cursor.exe'), 'vscode');
-		add('qoder', 'Qoder', path.join(root, 'Programs', 'Qoder', 'Qoder.exe'), 'vscode');
-		add('codebuddy', 'CodeBuddy', path.join(root, 'Programs', 'CodeBuddy CN', 'CodeBuddy CN.exe'), 'vscode');
+
+	// 1) JetBrains 全家族：目录里的每个产品都登记，探测到的带上路径。
+	const jetbrainsFound = new Map();
+	for (const row of scanJetBrains()) {
+		jetbrainsFound.set(row.label.toLowerCase().replace(/[^a-z0-9]+/g, '-'), row.path);
 	}
-	add('sublime', 'Sublime Text', 'C:\\Program Files\\Sublime Text\\subl.exe', 'sublime');
-	// Markdown 专用编辑器：Typora 常见装在 C:/E: 的 Program Files (x86) 或 Program Files。
-	for (const root of ['C:\\Program Files\\Typora', 'E:\\Program Files (x86)\\Typora', 'C:\\Program Files (x86)\\Typora', 'D:\\Program Files (x86)\\Typora', 'D:\\Program Files\\Typora', 'E:\\Program Files\\Typora']) {
-		add('typora', 'Typora', path.join(root, 'Typora.exe'), 'typora');
+	for (const [product, , label] of JETBRAINS_PRODUCTS) {
+		const id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+		add(id, label, 'idea', jetbrainsFound.get(id));
 	}
+
+	// 2) 目录里的通用编辑器：每个都登记，探测到的带上路径。
+	for (const entry of EDITOR_CATALOG) {
+		let hit = null;
+		for (const candidate of entry.paths(roots)) {
+			if (isFile(candidate)) { hit = candidate; break; }
+		}
+		add(entry.id, entry.label, entry.kind, hit);
+	}
+
+	// 3) 自定义行：名称命中已知 id/显示名时当作路径覆盖，否则新增一条。
 	for (const raw of Array.isArray(config?.editors) ? config.editors : []) {
-		const text = String(raw ?? '').trim();
-		if (!text) continue;
-		const eq = text.indexOf('=');
-		const label = (eq > 0 ? text.slice(0, eq).trim() : path.basename(text)).replace(/\.exe$/i, '');
-		const exe = eq > 0 ? text.slice(eq + 1).trim() : text;
-		const lower = exe.toLowerCase();
-		const kind = /typora|marktext|zettlr|obsidian/.test(lower) ? 'markdown' : /subl/.test(lower) ? 'sublime' : /idea|webstorm|pycharm|goland|rider|rustrover|phpstorm/.test(lower) ? 'idea' : /code|trae|cursor|windsurf|qoder|codebuddy/.test(lower) ? 'vscode' : 'idea';
-		add(`custom-${list.length}`, label || '自定义编辑器', exe, kind);
+		const parsed = parseEditorLine(raw);
+		if (!parsed) continue;
+		const nameKey = parsed.name.toLowerCase();
+		const target = nameKey
+			? byId.get(nameKey) || list.find((item) => item.label.toLowerCase() === nameKey)
+			: null;
+		if (target) {
+			if (isFile(parsed.exe)) { target.path = parsed.exe; target.found = true; }
+			continue;
+		}
+		if (!isFile(parsed.exe)) continue;
+		const label = parsed.name || path.basename(parsed.exe).replace(/\.exe$/i, '');
+		add(`custom-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, label, kindOfPath(parsed.exe), parsed.exe);
 	}
+
 	return list;
+}
+
+/** 菜单里可用的编辑器：只取已勾选且探测到路径的。 */
+export function enabledEditors(config = {}) {
+	return findEditors(config).filter((item) => item.enabled && item.found && item.path);
 }
 
 /** Electron 编辑器会继承 DSH 的 ELECTRON_RUN_AS_NODE=1 变成 Node 直接退出，启动前必须清掉。 */
@@ -188,6 +333,9 @@ export function openInEditor(editor, file, line) {
 		args.push(file);
 	} else if (editor.kind === 'sublime') {
 		args.push(n ? `${file}:${n}` : file);
+	} else if (editor.kind === 'notepad') {
+		if (n) args.push(`-n${n}`);
+		args.push(file);
 	} else {
 		if (n) args.push('--line', String(n));
 		args.push(file);
@@ -313,11 +461,15 @@ export function apply(ctx, config = {}) {
 		};
 
 		route('GET', 'state', (_req, res) => {
-			const editors = findEditors(config);
+			const all = findEditors(config);
 			sendJson(res, 200, {
 				ok: true,
 				ideaPath: findIdeaExecutable(config?.ideaPath),
-				editors: editors.map(({ id, label, kind }) => ({ id, label, kind, markdownOnly: kind === 'typora' || kind === 'markdown' })),
+				// 全部检测到的编辑器，带勾选状态：设置页按这个渲染清单，菜单只取 enabled 的。
+				editors: all.map(({ id, label, kind, path: exe, enabled }) => ({
+					id, label, kind, path: exe, enabled,
+					markdownOnly: kind === 'typora' || kind === 'markdown',
+				})),
 				workspaceRoot: config?.workspaceRoot || '',
 				roots: candidateRoots(ctx, config).slice(0, 5),
 				config: {
@@ -325,6 +477,7 @@ export function apply(ctx, config = {}) {
 					workspaceRoot: config?.workspaceRoot ?? '',
 					searchRoots: Array.isArray(config?.searchRoots) ? config.searchRoots : [],
 					editors: Array.isArray(config?.editors) ? config.editors : [],
+					hiddenEditors: Array.isArray(config?.hiddenEditors) ? config.hiddenEditors : [],
 				},
 			});
 		});
@@ -340,6 +493,7 @@ export function apply(ctx, config = {}) {
 			if (typeof body?.workspaceRoot === 'string') patch.workspaceRoot = body.workspaceRoot.trim();
 			if (Array.isArray(body?.searchRoots)) patch.searchRoots = body.searchRoots.filter((v) => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
 			if (Array.isArray(body?.editors)) patch.editors = body.editors.filter((v) => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
+			if (Array.isArray(body?.hiddenEditors)) patch.hiddenEditors = body.hiddenEditors.filter((v) => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
 			await editor.edit(entry, (current) => ({ ...current, ...patch }));
 			sendJson(res, 200, { ok: true });
 		});
@@ -397,7 +551,7 @@ export function apply(ctx, config = {}) {
 				});
 				return;
 			}
-			const editors = findEditors(config);
+			const editors = enabledEditors(config);
 			const editor = editors.find((item) => item.id === body?.editor) || editors[0];
 			if (!editor) { sendJson(res, 500, { ok: false, error: '没有可用的编辑器，请在设置里配置 ideaPath 或 editors' }); return; }
 			const line = Number(body?.line);
