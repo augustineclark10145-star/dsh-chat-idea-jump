@@ -264,7 +264,8 @@ export function findEditors(config = {}) {
 			if (found && !existing.path) { existing.path = exe; existing.found = true; }
 			return existing;
 		}
-		const item = { id: key, label, kind, path: found ? exe : '', found, enabled: !hidden.has(key) };
+		// 默认只勾选探测到的：没装的不进菜单，用户填了路径再自己勾。
+		const item = { id: key, label, kind, path: found ? exe : '', found, enabled: found && !hidden.has(key) };
 		byId.set(key, item);
 		list.push(item);
 		return item;
@@ -298,7 +299,12 @@ export function findEditors(config = {}) {
 			? byId.get(nameKey) || list.find((item) => item.label.toLowerCase() === nameKey)
 			: null;
 		if (target) {
-			if (isFile(parsed.exe)) { target.path = parsed.exe; target.found = true; }
+			if (isFile(parsed.exe)) {
+				target.path = parsed.exe;
+				target.found = true;
+				// 填了路径就默认启用，否则「未检测到支持自定义」等于没做。
+				target.enabled = !hidden.has(target.id);
+			}
 			continue;
 		}
 		if (!isFile(parsed.exe)) continue;
@@ -309,9 +315,9 @@ export function findEditors(config = {}) {
 	return list;
 }
 
-/** 菜单里可用的编辑器：只取已勾选且探测到路径的。 */
+/** 菜单里可用的编辑器：只取已勾选且探测到路径的；一个都没有就返回空（菜单只剩右侧栏）。 */
 export function enabledEditors(config = {}) {
-	return findEditors(config).filter((item) => item.enabled && item.found && item.path);
+	return findEditors(config).filter((item) => item.enabled && item.path);
 }
 
 /** Electron 编辑器会继承 DSH 的 ELECTRON_RUN_AS_NODE=1 变成 Node 直接退出，启动前必须清掉。 */
@@ -466,8 +472,8 @@ export function apply(ctx, config = {}) {
 				ok: true,
 				ideaPath: findIdeaExecutable(config?.ideaPath),
 				// 全部检测到的编辑器，带勾选状态：设置页按这个渲染清单，菜单只取 enabled 的。
-				editors: all.map(({ id, label, kind, path: exe, enabled }) => ({
-					id, label, kind, path: exe, enabled,
+				editors: all.map(({ id, label, kind, path: exe, found, enabled }) => ({
+					id, label, kind, path: exe, found, enabled,
 					markdownOnly: kind === 'typora' || kind === 'markdown',
 				})),
 				workspaceRoot: config?.workspaceRoot || '',
@@ -493,7 +499,10 @@ export function apply(ctx, config = {}) {
 			if (typeof body?.workspaceRoot === 'string') patch.workspaceRoot = body.workspaceRoot.trim();
 			if (Array.isArray(body?.searchRoots)) patch.searchRoots = body.searchRoots.filter((v) => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
 			if (Array.isArray(body?.editors)) patch.editors = body.editors.filter((v) => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
-			if (Array.isArray(body?.hiddenEditors)) patch.hiddenEditors = body.hiddenEditors.filter((v) => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
+			if (Array.isArray(body?.hiddenEditors)) {
+				// 去重：前端曾把路径框也当勾选框读，写进过重复 id。
+				patch.hiddenEditors = [...new Set(body.hiddenEditors.filter((v) => typeof v === 'string').map((v) => v.trim()).filter(Boolean))];
+			}
 			await editor.edit(entry, (current) => ({ ...current, ...patch }));
 			sendJson(res, 200, { ok: true });
 		});

@@ -175,10 +175,9 @@ window.__ModuleLoader__.load({
 				let editorList = [{ id: 'idea', label: 'IDEA', kind: 'idea' }];
 				let configState = { ideaPath: '', editors: [], hiddenEditors: [] };
 
-				/** 勾选状态变化后重算菜单列表：一个都没勾就退回全部，避免菜单空掉。 */
+				/** 勾选状态变化后重算菜单列表：只保留勾选且找到路径的，不兜底回全部。 */
 				function syncEnabled() {
-					const on = allEditors.filter((item) => item.enabled !== false);
-					editorList = on.length ? on : allEditors;
+					editorList = allEditors.filter((item) => item.enabled !== false && item.found && item.path);
 				}
 
 				// 菜单里的编辑器列表来自 host 自动探测 + 设置页额外配置；失败就保留 IDEA 兜底。
@@ -226,8 +225,7 @@ window.__ModuleLoader__.load({
 				function editorActions(info) {
 					const target = String(info?.path || info?.address || '');
 					const isMarkdown = /\.md(?:$|[?#:])/i.test(target);
-					const list = (editorList.length ? editorList : [{ id: 'idea', label: 'IDEA', kind: 'idea' }])
-						.filter((editor) => !editor.markdownOnly || isMarkdown)
+					const list = editorList.filter((editor) => !editor.markdownOnly || isMarkdown)
 						.sort((a, b) => (b.markdownOnly ? 1 : 0) - (a.markdownOnly ? 1 : 0));
 					return list.map((editor) => [
 						`${editor.label} 打开`,
@@ -406,14 +404,18 @@ window.__ModuleLoader__.load({
 								const form = event.currentTarget;
 								const hiddenIds = [];
 								const lines = [];
-								for (const input of form.querySelectorAll('input[data-editor-id]')) {
-									if (!input.checked) hiddenIds.push(input.dataset.editorId);
-									const value = String(input.value || '').trim();
+								// 只看勾选框；路径框是 input[type=text]，混进来会把每行都判成未勾选。
+								// 只记录「有路径却没勾」的：没装的本来就禁用，写进去会让以后装了也不显示。
+								for (const check of form.querySelectorAll('input[type=checkbox][data-editor-id]')) {
+									if (!check.checked && check.dataset.hasPath === '1') hiddenIds.push(check.dataset.editorId);
+								}
+								for (const field of form.querySelectorAll('input[type=text][data-editor-id]')) {
+									const value = String(field.value || '').trim();
 									// 用户填/改过路径的行才写进 editors，避免把探测结果固化成配置。
-									if (value && value !== String(input.dataset.detected || '')) lines.push(`${input.dataset.editorLabel}=${value}`);
+									if (value && value !== String(field.dataset.detected || '')) lines.push(`${field.dataset.editorLabel}=${value}`);
 								}
 								const extra = String(form.elements?.editors?.value ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-								const values = { ideaPath: String(form.elements?.ideaPath?.value ?? '').trim(), editors: lines.concat(extra), hiddenEditors: hiddenIds };
+								const values = { editors: lines.concat(extra), hiddenEditors: hiddenIds };
 								try {
 									const res = await fetch('/api/chat-idea-jump/config', {
 										method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
@@ -421,6 +423,11 @@ window.__ModuleLoader__.load({
 									const data = await res.json().catch(() => ({}));
 									if (!data.ok) { toast(`保存失败：${data.error || res.status}`, true); return; }
 									toast('已保存，插件正在重启生效…');
+									// 重新拉一次，避免连续保存时读到旧勾选状态。
+									const fresh = await fetch('/api/chat-idea-jump/state').then((r) => r.json()).catch(() => null);
+									if (Array.isArray(fresh?.editors) && fresh.editors.length) allEditors = fresh.editors;
+									if (fresh?.config && typeof fresh.config === 'object') configState = fresh.config;
+									syncEnabled();
 								} catch (error) { toast(`保存失败：${String(error?.message ?? error)}`, true); }
 							};
 
@@ -429,7 +436,8 @@ window.__ModuleLoader__.load({
 									type: 'checkbox',
 									'data-editor-id': editor.id,
 									'data-editor-label': editor.label,
-									defaultChecked: !hidden.has(String(editor.id).toLowerCase()),
+									'data-has-path': editor.path ? '1' : '0',
+									defaultChecked: editor.enabled !== false,
 									title: '打勾即显示在菜单里',
 									style: { width: 14, height: 14, margin: 0, cursor: 'pointer' },
 								}),
@@ -447,6 +455,7 @@ window.__ModuleLoader__.load({
 							return E('form', { onSubmit: save, style: { display: 'grid', gap: '14px', maxWidth: 660, fontSize: '12.5px', fontFamily: 'inherit' } },
 								E('div', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, `编辑器（打勾即显示在菜单里，共 ${all.length} 项）`),
+									E('div', { style: { marginBottom: 6, opacity: .55, fontSize: '11.5px' } }, '全部取消勾选时，菜单只保留「右侧栏打开」。'),
 									E('div', null, rows)),
 								E('label', null,
 									E('div', { style: { marginBottom: 4, opacity: .75 } }, '其他编辑器（每行：名称=exe路径）'),

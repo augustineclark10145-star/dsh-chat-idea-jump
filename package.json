@@ -1,6 +1,6 @@
 {
   "name": "dsh-chat-idea-jump",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Click a file reference in DSH chat to open it in the right sidebar or an installed desktop editor at the exact line.",
   "license": "MIT",
   "keywords": [
