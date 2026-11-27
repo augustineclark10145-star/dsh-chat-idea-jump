@@ -1,5 +1,5 @@
 /**
- * @local/chat-idea-jump — client 半 v3。
+ * dsh-chat-idea-jump — client 半 v3。
  *
  * 核心策略：不猜 DSH 内部渲染（芯片不是锚点、openFile 在 React 内部），
  * 改为按「元素文本长得像文件引用」识别：正文里任何短文本元素匹配
@@ -9,7 +9,7 @@
  * 保留：openResource 包装、真锚点拦截、官方右键菜单（file 目标）三路兜底。
  */
 window.__ModuleLoader__.load({
-	id: '@local/chat-idea-jump',
+	id: 'dsh-chat-idea-jump',
 	factory(require) {
 		const React = require('react');
 		const E = React.createElement;
@@ -417,7 +417,7 @@ window.__ModuleLoader__.load({
 							id: 'chat-idea-jump',
 							label: '聊天跳IDEA',
 							order: 81,
-							registrant: '@local/chat-idea-jump',
+							registrant: 'dsh-chat-idea-jump',
 						}, () => E(ConfigSection)));
 					}
 				} catch { /* 设置导航不可用时跳过，插件页卡片仍是备选 */ }

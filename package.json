@@ -1,18 +1,40 @@
 {
-  "name": "@local/chat-idea-jump",
+  "name": "dsh-chat-idea-jump",
   "version": "0.7.5",
-  "private": true,
+  "description": "Click a file reference in DSH chat to open it in the right sidebar or an installed desktop editor at the exact line.",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "intellij",
+    "vscode",
+    "editor",
+    "file-jump"
+  ],
+  "homepage": "https://github.com/augustineclark10145-star/dsh-chat-idea-jump#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/augustineclark10145-star/dsh-chat-idea-jump.git"
+  },
+  "bugs": {
+    "url": "https://github.com/augustineclark10145-star/dsh-chat-idea-jump/issues"
+  },
   "type": "module",
-  "description": "聊天里的文件引用点击弹出选择：右侧栏打开（定位行号）或 IDEA 打开（idea64.exe --line）",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "files": [
     "index.js",
     "client.js",
     "cordis.patch.yml",
-    "icon.svg"
+    "icon.svg",
+    "LICENSE",
+    "README.md"
   ],
   "dsh": {
     "bundle": {

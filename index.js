@@ -1,5 +1,5 @@
 /**
- * @local/chat-idea-jump — host 半。
+ * dsh-chat-idea-jump — host 半。
  *
  * 接收 file:/// 绝对路径或 dsh-resource://file/ 地址（+行号），解析成本地文件，
  * 用 IDEA / VS Code / Trae / Sublime 等已装编辑器打开。
@@ -23,7 +23,7 @@ export const Config = Schema.object({
 	editors: Schema.array(Schema.string()).default([]).description('额外编辑器，每项格式：名称=exe路径'),
 });
 
-export const name = '@local/chat-idea-jump';
+export const name = 'dsh-chat-idea-jump';
 export const inject = ['webServer'];
 
 const PREFIX = '/api/chat-idea-jump';
@@ -291,7 +291,7 @@ export function apply(ctx, config = {}) {
 	const mount = (rawServer) => {
 		const server = rawServer?.register ? rawServer : ctx.get?.('webServer');
 		if (!server || typeof server.register !== 'function') {
-			ctx.logger?.warn?.('@local/chat-idea-jump: webServer 服务不可用，路由未挂载');
+			ctx.logger?.warn?.('dsh-chat-idea-jump: webServer 服务不可用，路由未挂载');
 			return;
 		}
 		const route = (method, sub, handler) => {
@@ -378,7 +378,7 @@ export function apply(ctx, config = {}) {
 			if (!file) {
 				sendJson(res, 404, {
 					ok: false,
-					error: '文件没找到。可在 profile 的 cordis.patch.yml 里给 @local/chat-idea-jump 配置 searchRoots（项目根数组）后重启。',
+					error: '文件没找到。可在 profile 的 cordis.patch.yml 里给 dsh-chat-idea-jump 配置 searchRoots（项目根数组）后重启。',
 					addressPath: parsed?.path ?? body?.path ?? null,
 				});
 				return;
@@ -392,7 +392,7 @@ export function apply(ctx, config = {}) {
 			if (!file) {
 				sendJson(res, 404, {
 					ok: false,
-					error: '文件没找到。可在 profile 的 cordis.patch.yml 里给 @local/chat-idea-jump 配置 searchRoots（项目根数组）后重启。',
+					error: '文件没找到。可在 profile 的 cordis.patch.yml 里给 dsh-chat-idea-jump 配置 searchRoots（项目根数组）后重启。',
 					addressPath: parsed?.path ?? body?.path ?? null,
 				});
 				return;
@@ -402,7 +402,7 @@ export function apply(ctx, config = {}) {
 			if (!editor) { sendJson(res, 500, { ok: false, error: '没有可用的编辑器，请在设置里配置 ideaPath 或 editors' }); return; }
 			const line = Number(body?.line);
 			const pid = openInEditor(editor, file, Number.isFinite(line) ? line : undefined);
-			ctx.logger?.info?.(`@local/chat-idea-jump: ${editor.label} 打开 ${file}${Number.isFinite(line) ? `:${Math.trunc(line)}` : ''}`);
+			ctx.logger?.info?.(`dsh-chat-idea-jump: ${editor.label} 打开 ${file}${Number.isFinite(line) ? `:${Math.trunc(line)}` : ''}`);
 			sendJson(res, 200, { ok: true, file, line: Number.isFinite(line) ? Math.trunc(line) : null, editor: editor.label, pid, exe: editor.path });
 		});
 	};
@@ -410,7 +410,7 @@ export function apply(ctx, config = {}) {
 	try {
 		mount(ctx.get?.('webServer'));
 	} catch (error) {
-		ctx.logger?.warn?.(`@local/chat-idea-jump: 挂载失败 ${String(error?.message ?? error)}`);
+		ctx.logger?.warn?.(`dsh-chat-idea-jump: 挂载失败 ${String(error?.message ?? error)}`);
 	}
 
 	ctx.effect?.(() => () => {

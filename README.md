@@ -1,4 +1,4 @@
-# dsh插件-聊天跳IDEA（@local/chat-idea-jump）
+# dsh插件-聊天跳IDEA（dsh-chat-idea-jump）
 
 聊天里的文件引用（`dsh-resource://file/…` 链接）点击后弹出选择框：
 
@@ -26,9 +26,9 @@ Esc 或点击空白关闭选择框；Ctrl/Shift/Alt/Meta + 点击不拦截，保
 
 解析顺序：`file:///C:/...` 绝对路径直接用；只有纯文本里的相对路径才按当前会话 cwd 解析，最后按文件名搜索。
 
-等价写法：cordis.patch.yml 里 `@local/chat-idea-jump` 行的 `config` 也可直接改。
+等价写法：cordis.patch.yml 里 `dsh-chat-idea-jump` 行的 `config` 也可直接改。
 
 ## 排障
 
 - `GET /api/chat-idea-jump/state`：看 ideaPath 是否探测到、候选根目录列表
-- 链接点击没弹选择框：确认 bundles 里有 `@local/chat-idea-jump` 且 DSH 是完全退出后重启的
+- 链接点击没弹选择框：确认 bundles 里有 `dsh-chat-idea-jump` 且 DSH 是完全退出后重启的
